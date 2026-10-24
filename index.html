@@ -49,7 +49,7 @@ h3{font-size:15px;margin:0;font-weight:800;letter-spacing:-.01em}
 .pos{color:var(--ok)}.neg{color:var(--danger)}.brand{color:var(--brand)}
 .big{font-size:32px;font-weight:800;letter-spacing:-.035em;font-variant-numeric:tabular-nums;line-height:1.1}
 .num{font-variant-numeric:tabular-nums;font-weight:800;letter-spacing:-.01em}
-.link{border:0;background:none;color:var(--brand);font-weight:700;cursor:pointer;padding:0;font-size:13.5px}
+.link{border:0;background:none;color:var(--brand);font-weight:700;cursor:pointer;padding:8px 6px;margin:-8px -6px;font-size:13.5px;min-height:36px}
 .empty{padding:22px 16px;text-align:center;color:var(--muted);font-size:14px;border:1.5px dashed var(--line);border-radius:18px}
 .empty svg{margin:0 auto 8px;opacity:.6;width:30px;height:30px}
 /* íconos de categoría */
@@ -181,6 +181,8 @@ dialog{border:0;padding:0;margin:auto auto 0;width:100%;max-width:560px;max-heig
 @media(min-width:620px){dialog{margin:auto;border-radius:28px}}
 dialog::backdrop{background:rgba(8,12,10,.45);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
 .mform{padding:10px 18px calc(18px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px;overflow-y:auto;max-height:92vh}
+.mform>*{flex-shrink:0}
+.pickrow{min-height:48px}
 .mform::before{content:'';display:block;width:42px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 4px;flex:none}
 .mform h3{font-size:19px;font-weight:800}
 .mform label{display:flex;flex-direction:column;gap:6px;font-size:12.5px;font-weight:700;color:var(--muted)}
@@ -306,6 +308,13 @@ const DATA_SHEET = '_datos_app';
 
 function doGet(e) { return out_(leer_()); }
 
+/** Ejecuten esta función UNA vez desde el editor (botón ▶ Ejecutar) para crear las pestañas. */
+function configurar() {
+  const d = leer_();
+  vistas_(d.empty ? {} : d);
+  SpreadsheetApp.getActive().toast('Pestañas listas. Ahora implementen como Aplicación web.', 'Finanzas en pareja', 8);
+}
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -345,7 +354,7 @@ function guardar_(d) {
   if (!sh.isSheetHidden()) sh.hideSheet();
 }
 
-function tabla_(nombre, headers, rows) {
+function tabla_(nombre, headers, rows, money) {
   const ss = SpreadsheetApp.getActive();
   const sh = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
   sh.clear();
@@ -353,6 +362,8 @@ function tabla_(nombre, headers, rows) {
   sh.getRange(1, 1, all.length, headers.length).setValues(all);
   sh.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#1f6f5c').setFontColor('#ffffff');
   sh.setFrozenRows(1);
+  if (rows.length && money) money.forEach(c => sh.getRange(2, c, rows.length, 1).setNumberFormat('"$"#,##0.00'));
+  sh.autoResizeColumns(1, headers.length);
 }
 
 function vistas_(d) {
@@ -362,18 +373,35 @@ function vistas_(d) {
   (d.goals || []).forEach(g => goal[g.id] = g.name);
   (d.debts || []).forEach(x => debt[x.id] = x.name);
   const tx = (d.transactions || []).slice().sort((a, b) => (a.date < b.date ? 1 : -1));
+  // Resumen por mes: para comparar meses y analizar en qué se va la plata
+  const meses = {};
+  tx.forEach(t => {
+    if (!t.date) return;
+    const m = t.date.slice(0, 7), v = Number(t.amount || 0);
+    const r = meses[m] = meses[m] || { ing: 0, gas: 0, deu: 0, aho: 0, cats: {} };
+    if (t.type === 'ingreso') r.ing += v;
+    else if (t.type === 'gasto') { r.gas += v; const c = cat[t.categoryId] || 'Otros'; r.cats[c] = (r.cats[c] || 0) + v; }
+    else if (t.type === 'deuda') r.deu += v;
+    else if (t.type === 'ahorro') r.aho += v;
+  });
+  const catNames = (d.categories || []).filter(c => c.kind !== 'ingreso').map(c => c.name);
+  const ms = Object.keys(meses).sort().reverse();
+  const head = ['Mes', 'Ingresos', 'Gastos', 'Pagos a deudas', 'Ahorro', 'Quedó libre'].concat(catNames);
+  tabla_('Resumen por mes', head,
+    ms.map(m => { const r = meses[m]; return [m, r.ing, r.gas, r.deu, r.aho, r.ing - r.gas - r.deu - r.aho].concat(catNames.map(n => r.cats[n] || 0)); }),
+    head.map((_, i) => i + 1).slice(1));
   tabla_('Movimientos', ['Fecha', 'Tipo', 'Monto', 'Categoría', 'Cuenta', 'Hacia', 'Persona', 'Detalle', 'Meta / Deuda'],
-    tx.map(t => [t.date, t.kind || t.type, Number(t.amount || 0), cat[t.categoryId] || '', acc[t.accountId] || debt[t.cardDebtId] || '', acc[t.toAccountId] || '', t.person || '', t.note || '', goal[t.goalId] || debt[t.debtId] || '']));
+    tx.map(t => [t.date, t.kind || t.type, Number(t.amount || 0), cat[t.categoryId] || '', acc[t.accountId] || debt[t.cardDebtId] || '', acc[t.toAccountId] || '', t.person || '', t.note || '', goal[t.goalId] || debt[t.debtId] || '']), [3]);
   tabla_('Cuentas', ['Cuenta', 'Tipo', 'De quién'], (d.accounts || []).map(a => [a.name, a.kind || a.type || '', a.owner || '']));
   tabla_('Pagos fijos', ['Nombre', 'Valor', 'Cada (meses)', 'Próximo cobro', 'Categoría', 'Persona', 'Activo'],
-    (d.subscriptions || []).map(s => [s.name, Number(s.amount || 0), s.freq || 1, s.nextDue || '', cat[s.categoryId] || '', s.person || '', s.active === false ? 'No' : 'Sí']));
+    (d.subscriptions || []).map(s => [s.name, Number(s.amount || 0), s.freq || 1, s.nextDue || '', cat[s.categoryId] || '', s.person || '', s.active === false ? 'No' : 'Sí']), [2]);
   const drows = [];
   (d.debts || []).forEach(x => (x.items || []).forEach(i => drows.push([x.name, i.name, i.rate, Number(i.balance || 0), i.remaining, i.total])));
-  tabla_('Deudas', ['Deuda', 'Concepto', 'Tasa E.A. %', 'Saldo capital', 'Cuotas restantes', 'Cuotas totales'], drows);
+  tabla_('Deudas', ['Deuda', 'Concepto', 'Tasa E.A. %', 'Saldo capital', 'Cuotas restantes', 'Cuotas totales'], drows, [4]);
   tabla_('Metas', ['Meta', 'Objetivo', 'Ahorrado', 'Fecha límite'],
-    (d.goals || []).map(g => [g.name, Number(g.target || 0), tx.filter(t => t.type === 'ahorro' && t.goalId === g.id).reduce((s, t) => s + Number(t.amount || 0), 0), g.deadline || '']));
+    (d.goals || []).map(g => [g.name, Number(g.target || 0), tx.filter(t => t.type === 'ahorro' && t.goalId === g.id).reduce((s, t) => s + Number(t.amount || 0), 0), g.deadline || '']), [2, 3]);
   tabla_('Presupuestos', ['Categoría', 'Presupuesto mensual'],
-    (d.categories || []).filter(c => c.kind !== 'ingreso').map(c => [c.name, Number(c.budget || 0)]));
+    (d.categories || []).filter(c => c.kind !== 'ingreso').map(c => [c.name, Number(c.budget || 0)]), [2]);
 }
 </script>
 
@@ -1320,6 +1348,7 @@ function personIn(name){
   return '';
 }
 function whoIn(text){const re=/\b(?:a|para|de|desde)\s+([^\d$,.;:\n]{3,48})/gi;let m;while((m=re.exec(text))){const p=personIn(m[1]);if(p)return p}return ''}
+function otherIn(text){const n=norm(text);return state.people.find(p=>p!==me()&&[p,...String(state.aliases?.[p]||'').split(',')].map(x=>norm(x).trim()).filter(x=>x.length>=3).some(a=>n.includes(a)))||''}
 function cpName(text){const m=text.match(/\b(?:a|para|de)\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&'.\- ]{2,40}?)(?=\s+(?:por|con|el|desde|en|de|via)\b|[,.$]|$)/);return m?m[1].trim():''}
 function personAcc(p,text,exclude){
   const k=bankKey(text);
@@ -1329,11 +1358,13 @@ function personAcc(p,text,exclude){
 function classify(app,title,text){
   const p=parseNotif(title,text),full=`${title} ${text}`,n=norm(full);
   const acc=accFromApp(app)||sourceFor(p.last4)||'';
-  const who=whoIn(full);
+  if(!app){const k=bankKey(title);if(k)app=title}
+  const who=whoIn(full)||otherIn(full);
+  const sentByMe=/(enviaste|transferiste|pasaste|que enviaste)/.test(n);
   let type='gasto',from='',to='',note=p.merchant;
   if(RX_REND.test(n)){return {type:'ingreso',categoryId:'rendimientos',amount:p.amount,note:'Rendimientos'+(app?' '+app:''),from:'',to:acc||defAcc(),acc,app:app||'',raw:[title,text].filter(Boolean).join(' — '),date:todayStr()}}
   if(RX_RET.test(n)&&!RX_IN.test(n)){type='retiro';from=acc||defAcc()}
-  else if(RX_IN.test(n)){to=acc||defAcc();if(who){type='mover';from=personAcc(who,full,to);note=note||'De '+who}else{type='ingreso';const cp=cpName(full);note=note||(cp?'De '+cp:'')}}
+  else if(RX_IN.test(n)&&!sentByMe){to=acc||defAcc();if(who){type='mover';from=personAcc(who,full,to);note=note||'De '+who}else{type='ingreso';const cp=cpName(full);note=note||(cp?'De '+cp:'')}}
   else if(RX_OUT.test(n)){from=acc||defAcc();if(who){type='mover';to=personAcc(who,full,from);note=note||'Para '+who}else{type='gasto';note=note||cpName(full)}}
   else{type='gasto';from=acc||defSource()}
   if(type==='gasto'&&!from)from=acc||defSource();
@@ -1361,7 +1392,8 @@ function macroUrl(){return location.origin+location.pathname+'?add=1&app=[notifi
 async function handleIncoming(){
   const q=new URLSearchParams(location.search);
   if(!q.has('add')&&!q.has('t')&&!q.has('x'))return false;
-  const title=q.get('t')||q.get('title')||'',text=q.get('x')||q.get('text')||'',app=(q.get('app')||'').replace(/^\[.*\]$/,'');
+  const clean=s=>String(s||'').replace(/\[[a-z_]+\]/gi,'').trim();
+  const title=clean(q.get('t')||q.get('title')),text=clean(q.get('x')||q.get('text')),app=clean(q.get('app'));
   history.replaceState(null,'',location.pathname);
   const raw=[app,title,text].join('|');
   try{const last=JSON.parse(localStorage.getItem('fp-last-in')||'null');if(last&&last.raw===raw&&now()-last.at<60000)return true;localStorage.setItem('fp-last-in',JSON.stringify({raw,at:now()}))}catch(e){}

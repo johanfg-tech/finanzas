@@ -1,5 +1,5 @@
 // Finanzas en pareja: funciona sin internet. Sube el número de versión al publicar cambios.
-const CACHE = 'finanzas-v4';
+const CACHE = 'finanzas-v5';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 
 self.addEventListener('install', e => {
