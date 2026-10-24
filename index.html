@@ -1134,7 +1134,7 @@ function findDup(amount){
 }
 function notifBlock(data,type){
   const c=data.c;if(!c)return {top:'',bottom:''};
-  const dup=!data.pendingId?(c.amount?findDup(c.amount):recentPartnerTransfer()):null;
+  const dup=(!data.pendingId||c.fresh)?(c.amount?findDup(c.amount):recentPartnerTransfer()):null;
   const top=`<input type="hidden" name="ntype" value="${type}"><div class="seg" data-seg="ntype">${NTYPES.map(([v,l])=>`<button type="button" data-v="${v}" class="${v===type?'on':''}">${l}</button>`).join('')}</div>`+
     (dup?`<div class="insight int" style="margin:0">Ya hay un movimiento ${c.amount?'igual':`de ${fmt(dup.amount)}`} registrado hace ${Math.max(1,Math.round((now()-(dup.createdAt||dup.updatedAt))/60000))} min: <b>${esc(txMeta(dup).title)}</b>${dup.person?` (${esc(dup.person)})`:''}. Si es el mismo, no lo registren otra vez.<div style="margin-top:8px"><button type="button" class="btn sm" data-x="same">Es el mismo, no registrar</button></div></div>`:'');
   const unknown=c.app&&!c.acc&&!/wallet|google/i.test(c.app)?`<div class="pill warn" style="white-space:normal">No sé qué cuenta es "${esc(c.app)}". Elíjanla abajo y la recordaré.</div>`:'';
@@ -1529,7 +1529,9 @@ async function handleIncoming(){
   const c=classify(app,title,text);
   if(!c.amount&&!/(envi|recib|transf|pag|compra|retir|consign|abon|plata|dinero|qr|llave|bre-?b)/.test(norm(title+' '+text))){toast('Esa notificación no era un movimiento de plata');return true}
   if(state.settings.sheetsUrl){try{await Promise.race([syncNow(false),new Promise(r=>setTimeout(r,4000))])}catch(e){}}
-  openNotif(c);
+  // se guarda primero en 'Por clasificar': si llega otra notificación o cierran la ventana, no se pierde
+  c.fresh=true;const pid=uid();state.pending.push(touch({id:pid,c,amount:c.amount,merchant:c.note||c.app,date:c.date}));persist();render();
+  openNotif(c,c.type,pid);
   return true;
 }
 const EXAMPLES=[
