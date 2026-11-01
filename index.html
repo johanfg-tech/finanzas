@@ -719,6 +719,17 @@ function simulate(d,extra,rollover){
   }
   return {months,interest,ins};
 }
+/* ---- ¿qué cuota cubre cada pago? ---- */
+function dueDates(d){const n=new Date();return [-1,0,1,2].map(k=>ymd(clampDay(n.getFullYear(),n.getMonth()+k,+d.dueDay||1)))}
+function dueCovered(d,due,skip){
+  const txs=state.transactions.filter(t=>t.type==='deuda'&&t.debtId===d.id&&t.id!==skip);
+  if(txs.some(t=>t.forDue===due))return true;
+  const lo=addDays(due,-24),hi=addDays(due,5),inWin=x=>x.date&&x.date>=lo&&x.date<=hi;
+  if(txs.some(t=>!t.forDue&&inWin(t)))return true;
+  return (d.history||[]).some(hh=>hh.amount&&hh.id!==skip&&!state.transactions.some(t=>t.id===hh.id)&&inWin(hh));
+}
+function nextOpenDue(d,skip){const ds=dueDates(d);return ds.find(x=>x>=addDays(todayStr(),-10)&&!dueCovered(d,x,skip))||ds[2]}
+function dueOptions(d,sel,skip){return dueDates(d).filter(x=>x>=addDays(todayStr(),-40)).map(x=>opt(x,`Cuota del ${fmtDate(x)}${dueCovered(d,x,skip)?' (ya marcada como pagada)':''}`,sel)).join('')}
 function cardAdjust(debtId,delta){
   const d=debtById(debtId);if(!d)return;
   let it=d.items.find(i=>i.id===d.id+'-nuevas');
@@ -819,14 +830,14 @@ function upcoming(days){
   const out=[];
   state.subscriptions.forEach(s=>{if(s.active===false||!s.nextDue)return;const dd=daysUntil(s.nextDue);if(dd<=days)out.push({date:s.nextDue,dd,name:s.name,amount:+s.amount,kind:'sub',id:s.id,ic:catById(s.categoryId)?.ic||'calendar',color:catCol(catById(s.categoryId))})});
   state.debts.forEach(d=>{if(!d.dueDay||debtCapital(d)<1)return;const date=nextDayOfMonth(+d.dueDay),dd=daysUntil(date);
-    const paid=state.transactions.some(t=>t.type==='deuda'&&t.debtId===d.id&&daysUntil(t.date)<=0&&daysUntil(t.date)>=dd-24);
+    const paid=dueCovered(d,date);
     if(!paid&&dd<=days)out.push({date,dd,name:d.name,amount:debtNext(d).total,kind:'debt',id:d.id,ic:'card',color:'var(--int)'})});
   return out.sort((a,b)=>a.dd-b.dd);
 }
 function duePill(dd){if(dd<0)return `<span class="pill danger">Vencido ${-dd} d</span>`;if(dd===0)return `<span class="pill danger">Hoy</span>`;if(dd<=3)return `<span class="pill warn">En ${dd} d</span>`;return `<span class="pill">En ${dd} días</span>`}
 function upcomingList(){
   const list=upcoming(20), noDate=state.subscriptions.filter(s=>s.active!==false&&!s.nextDue).length;
-  let h=list.length?`<div class="list">${list.map(u=>`<button class="item" data-a="${u.kind==='sub'?'paySub':'payDebt'}" data-id="${u.id}">${ico(u.ic,u.color,'sm')}<span class="tm"><b>${esc(u.name)}</b><small>${fmtDate(u.date)} · toca para pagar</small></span><span class="amt">${fmt(u.amount)}<small>${duePill(u.dd)}</small></span></button>`).join('')}</div>`:empty('Nada por pagar en los próximos 20 días.','calendar');
+  let h=list.length?`<div class="list">${list.map(u=>`<button class="item" data-a="${u.kind==='sub'?'paySub':'payDebt'}" data-id="${u.id}">${ico(u.ic,u.color,'sm')}<span class="tm"><b>${esc(u.name)}</b><small>${fmtDate(u.date)} · toca para pagar${u.kind==='debt'?' o marcar como pagada':''}</small></span><span class="amt">${fmt(u.amount)}<small>${duePill(u.dd)}</small></span></button>`).join('')}</div>`:empty('Nada por pagar en los próximos 20 días.','calendar');
   if(noDate)h+=`<p class="tiny muted" style="margin:10px 0 0">${noDate} pagos fijos no tienen fecha todavía. <button class="link tiny" data-a="go" data-id="fijos">Ponerles fecha</button></p>`;
   return h;
 }
@@ -837,7 +848,7 @@ function txMeta(t){
   if(t.type==='ingreso')return {ic:c?.ic||'trend',color:'var(--ok)',title:t.note||c?.name||'Ingreso',sub:[src,t.person],sign:'+',cls:'pos'};
   if(t.type==='transferencia'){const to=accById(t.toAccountId)?.name||'';const lbl=t.kind==='retiro'?'Retiro en efectivo':t.kind==='consigna'?'Consignación':'Transferencia';return {ic:t.kind==='retiro'?'cash':'swap',color:PAL[2],title:t.note||lbl,sub:[`${src} → ${to}`,t.person],sign:'',cls:'muted'}}
   if(t.type==='ahorro'){const g=goalById(t.goalId);return {ic:'piggy',color:goalCol(g),title:(t.amount<0?'Retiro de ':'Ahorro: ')+(g?.name||'meta'),sub:[src,t.person],sign:t.amount<0?'+':'-',cls:'brand'}}
-  if(t.type==='deuda')return {ic:'card',color:'var(--int)',title:t.note||'Pago de deuda',sub:[t.split?`intereses ${fmt(t.split.interest)}`:'',src],sign:'-',cls:''};
+  if(t.type==='deuda')return {ic:'card',color:'var(--int)',title:t.note||'Pago de deuda',sub:[t.forDue?`cuota del ${fmtDate(t.forDue)}`:'',t.split?`intereses ${fmt(t.split.interest)}`:'',src||'sin descontar de cuentas'],sign:'-',cls:''};
   return {ic:'box',title:t.note||'',sub:[],sign:'',cls:''};
 }
 function txRow(t,accId){const x=txMeta(t);let sign=x.sign,cls=x.cls;if(accId&&t.type==='transferencia'){const inn=t.toAccountId===accId;sign=inn?'+':'-';cls=inn?'pos':''}return `<button class="item" data-a="editTx" data-id="${t.id}">${ico(x.ic,x.color,'sm')}<span class="tm"><b>${esc(x.title)}</b><small>${esc(x.sub.filter(Boolean).join(' · '))}</small></span><span class="amt ${cls}">${sign}${fmt(Math.abs(t.amount))}<small>${fmtDate(t.date)}</small></span></button>`}
@@ -1053,7 +1064,7 @@ function computePlan(){
   const debts=state.debts.filter(d=>d.dueDay&&debtCapital(d)>1).map(d=>{
     const s=parseD(per.start),due=[clampDay(s.getFullYear(),s.getMonth(),+d.dueDay),clampDay(s.getFullYear(),s.getMonth()+1,+d.dueDay)].map(ymd).find(x=>x>=per.start&&x<=per.end);
     if(!due)return null;
-    const paid=txs.some(t=>t.type==='deuda'&&t.debtId===d.id)||(d.history||[]).some(h=>h.amount&&h.date&&h.date>=per.start&&h.date<=per.end);
+    const paid=dueCovered(d,due);
     return {name:d.name,amount:debtNext(d).total,date:due,paid,id:d.id};
   }).filter(x=>x&&!x.paid);
   const fixedT=fixed.reduce((s,x)=>s+x.amount,0), debtsT=debts.reduce((s,x)=>s+x.amount,0);
@@ -1438,8 +1449,10 @@ function openSpecialTx(tx){
     <div class="num" style="font-size:30px">${fmt(Math.abs(tx.amount))}</div>
     <p class="small muted" style="margin:0">${fmtDateLong(tx.date)}${tx.split?`<br>Intereses ${fmt(tx.split.interest)} · bajó capital ${fmt(tx.split.capital)}${tx.split.insurance?` · seguro ${fmt(tx.split.insurance)}`:''}`:''}</p>
     <label>Nota<input name="note" value="${esc(tx.note||'')}"></label>
+    ${tx.type==='deuda'&&d?`${d.dueDay?`<label>¿Qué cuota cubre?<select name="forDue">${dueOptions(d,tx.forDue||'',tx.id).replace('<option','<option value="">Automático según la fecha</option><option')}</select></label>`:''}
+    <label class="check"><input type="checkbox" name="nodeduct" ${!tx.accountId?'checked':''}> No descontar de mis cuentas (la plata ya no estaba)</label>`:''}
     ${tx.type==='deuda'?`<p class="tiny muted" style="margin:0">${canRevert?'Si lo eliminan, la deuda vuelve a como estaba antes de este pago.':'Si lo eliminan, corrijan el saldo de la deuda con "Extracto".'}</p>`:''}`,
-  f=>{tx.note=val(f,'note');touch(tx)},
+  f=>{tx.note=val(f,'note');if(tx.type==='deuda'){if(f.elements.forDue)tx.forDue=val(f,'forDue');const nod=f.elements.nodeduct?.checked;if(nod&&tx.accountId){tx._acc=tx.accountId;tx.accountId='';tx.noDeduct=true}else if(!nod&&!tx.accountId){tx.accountId=tx._acc||defAcc();tx.noDeduct=false}}touch(tx)},
   {del:()=>{if(canRevert){d.items=tx.snapshot;d.history.pop();touch(d)}remove('transactions',tx.id)},delMsg:'¿Eliminar este movimiento?'});
 }
 function editTx(id){const t=txById(id);if(!t)return;if(t.type==='gasto')return openExpense({tx:t});if(t.type==='ingreso')return openIncome(t);if(t.type==='transferencia')return openMove(t.kind,t);openSpecialTx(t)}
@@ -1461,8 +1474,10 @@ function openPayDebt(id){
   modal(`<h3>Pagar ${esc(d.name)}</h3>
     <p class="small muted" style="margin:0">Cuota estimada <b>${fmt(nx.total)}</b>: capital ${fmt(nx.capital)} · intereses ${fmt(nx.interest)}${nx.insurance?` · seguro ${fmt(nx.insurance)}`:''}. Escriban el valor real que pagaron.</p>
     <input class="amount" name="amount" inputmode="decimal" value="${fmtPlain(Math.round(nx.total*100)/100)}" data-focus>
-    <label>Desde</label>${sourcePick('source',def,false)}
-    <div class="g2"><label>Fecha<input type="date" name="date" value="${todayStr()}"></label><label>¿Quién?${personSel(me())}</label></div>
+    ${d.dueDay?`<label>¿Qué cuota están pagando?<select name="forDue">${dueOptions(d,nextOpenDue(d))}</select></label>`:''}
+    <label class="check"><input type="checkbox" name="nodeduct"> Ya lo había pagado y la plata ya no está en mis cuentas (solo marcar como pagada, no descontar)</label>
+    <div id="srcbox"><label>Desde</label>${sourcePick('source',def,false)}</div>
+    <div class="g2"><label>Fecha del pago<input type="date" name="date" value="${todayStr()}"></label><label>¿Quién?${personSel(me())}</label></div>
     ${live.length>1?`<label>Si pagan más de la cuota, el extra va a<select name="extra">${live.map(i=>opt(i.id,`${i.name} (${i.rate}%)`,live[0].id)).join('')}</select></label>`:''}
     <label class="check"><input type="checkbox" name="plazo" checked> Con el extra, reducir el plazo (recomendado)</label>`,
   f=>{
@@ -1471,9 +1486,10 @@ function openPayDebt(id){
     const res=applyDebtPayment(d,amount,val(f,'extra')||live[0]?.id,f.elements.plazo.checked);
     const tid=uid(),date=val(f,'date')||todayStr();
     d.history=d.history||[];d.history.push({id:tid,date,amount,interest:res.interest,insurance:res.insurance,after:debtCapital(d)});touch(d);
-    state.transactions.push(touch({id:tid,type:'deuda',date,amount,accountId:val(f,'source'),person:val(f,'person'),debtId:d.id,note:'Pago '+d.name,split:res,snapshot,createdAt:now()}));
-    toast(`Bajaron ${fmt(res.capital)} de capital 💪`);setTimeout(confetti,200);
-  },{submit:'Registrar pago',onNew:quickNewAccount});
+    const nod=f.elements.nodeduct.checked;
+    state.transactions.push(touch({id:tid,type:'deuda',date,amount,accountId:nod?'':val(f,'source'),noDeduct:nod,forDue:val(f,'forDue')||'',person:val(f,'person'),debtId:d.id,note:'Pago '+d.name,split:res,snapshot,createdAt:now()}));
+    toast(nod?`Cuota marcada como pagada. Bajaron ${fmt(res.capital)} de capital; sus cuentas no cambiaron.`:`Bajaron ${fmt(res.capital)} de capital 💪`);setTimeout(confetti,200);
+  },{submit:'Registrar pago',onNew:quickNewAccount,onOpen:f=>{const cb=f.elements.nodeduct,up=()=>{f.querySelector('#srcbox').style.display=cb.checked?'none':''};cb.addEventListener('change',up);up()}});
 }
 function itemRowHtml(i={}){
   return `<div class="card" style="padding:10px;margin:0;box-shadow:none" data-iid="${esc(i.id||uid())}">
